@@ -1,0 +1,196 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0,maximum-scale=1.0,user-scalable=no">
+<title>手机文本查询‑本地文件库</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
+body{background:#f3f4f6;padding:14px;color:#111;font-size:16px}
+.card{background:#ffffff;border-radius:12px;padding:16px;margin-bottom:14px;box-shadow:0 1px 6px rgba(0,0,0,0.08)}
+h1{font-size:20px;margin-bottom:12px}
+label{display:block;margin:10px 0 6px 0;font-weight:500}
+input[type="file"]{width:100%;margin:6px 0}
+#keyword{width:100%;padding:12px 10px;border:1px solid #d1d5db;border-radius:8px;font-size:16px}
+.btn-wrap{display:flex;gap:8px;margin-top:14px;flex-wrap:wrap}
+button{flex:1;min-width:80px;padding:12px 6px;border:none;border-radius:8px;font-size:15px}
+.btn-blue{background:#2563eb;color:#fff}
+.btn-gray{background:#6b7280;color:#fff}
+.btn-red{background:#dc2626;color:#fff}
+.info-text{color:#444;font-size:14px;margin:8px 0}
+textarea{width:100%;min-height:260px;padding:10px;border:1px solid #ddd;border-radius:8px;font-family:monospace;font-size:13px;white-space:pre-wrap}
+.file-item{display:flex;align-items:center;justify-content:space-between;padding:10px 8px;border-bottom:#eee 1px solid}
+.file-name{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;margin-right:8px}
+.file-item button{padding:6px 8px;min-width:auto;font-size:13px}
+.active-file{background:#dbeafe}
+#fileLib{max-height:220px;overflow-y:auto;border:1px solid #eee;border-radius:8px;margin:8px 0}
+</style>
+</head>
+<body>
+<div class="card">
+    <h1>本地文本查询（文件库）</h1>
+    <label>上传新文件加入文件库(txt/csv)</label>
+    <input type="file" id="fileInput" accept=".txt,.csv">
+
+    <div class="info-text">📂 文件库列表（点击选用作为查询数据源）</div>
+    <div id="fileLib"></div>
+    <div class="info-text">当前选中文件：<span id="currentFile">无</span></div>
+
+    <label>输入查询关键词(多个空格隔开)</label>
+    <input id="keyword" placeholder="输入要查找的内容">
+
+    <div class="btn-wrap">
+        <button class="btn-blue" onclick="searchRun()">查询</button>
+        <button class="btn-gray" onclick="exportData()">导出结果</button>
+        <button class="btn-gray" onclick="resetResult()">清空结果</button>
+    </div>
+</div>
+
+<div class="card">
+    <div class="info-text">匹配条数：<span id="matchCount">0</span></div>
+    <textarea id="output" readonly placeholder="查询结果会显示在这里"></textarea>
+</div>
+
+<script>
+let db = null;
+let currentSourceText = "";
+let currentFileName = "";
+let resultArr = [];
+
+//初始化 IndexedDB
+function initDB(){
+    return new Promise((resolve,reject)=>{
+        const req = indexedDB.open("TextSearchLib",1);
+        req.onupgradeneeded = e=>{
+            db = e.target.result;
+            if(!db.objectStoreNames.contains("files")){
+                db.createObjectStore("files",{keyPath:"id",autoIncrement:true});
+            }
+        }
+        req.onsuccess = e=>{
+            db = e.target.result;
+            resolve();
+        }
+        req.onerror = e=>reject(e.target.error);
+    })
+}
+
+async function renderFileList(){
+    const tx = db.transaction("files","readonly");
+    const store = tx.objectStore("files");
+    const getAll = store.getAll();
+    getAll.onsuccess = ()=>{
+        const list = getAll.result;
+        const box = document.querySelector("#fileLib");
+        box.innerHTML = "";
+        if(list.length===0){
+            box.innerHTML = `<div style="padding:10px;color:#888">暂无文件，请上传</div>`;
+            return;
+        }
+        list.forEach(item=>{
+            const div = document.createElement("div");
+            div.className = "file-item"+(item.name===currentFileName?" active-file":"");
+            div.innerHTML = `
+                <span class="file-name" title="${item.name}">${item.name}</span>
+                <div>
+                    <button onclick="selectFile(${item.id})" class="btn-blue">选用</button>
+                    <button onclick="deleteFile(${item.id})" class="btn-red">删除</button>
+                </div>
+            `;
+            box.appendChild(div);
+        })
+    }
+}
+
+async function saveFileToDB(name,text){
+    const tx = db.transaction("files","readwrite");
+    const store = tx.objectStore("files");
+    store.add({name,text});
+    tx.oncomplete = ()=>renderFileList();
+}
+
+async function selectFile(id){
+    return new Promise(resolve=>{
+        const tx = db.transaction("files","readonly");
+        const store = tx.objectStore("files");
+        const req = store.get(id);
+        req.onsuccess = ()=>{
+            const item = req.result;
+            currentSourceText = item.text;
+            currentFileName = item.name;
+            document.querySelector("#currentFile").innerText = item.name;
+            renderFileList();
+            resolve();
+        }
+    })
+}
+
+async function deleteFile(id){
+    const tx = db.transaction("files","readwrite");
+    const store = tx.objectStore("files");
+    store.delete(id);
+    tx.oncomplete = ()=>{
+        if(currentFileName){
+            currentSourceText = "";
+            currentFileName = "";
+            document.querySelector("#currentFile").innerText = "无";
+        }
+        renderFileList();
+    }
+}
+
+document.querySelector('#fileInput').addEventListener('change',async e=>{
+    const f = e.target.files[0];
+    if(!f)return;
+    const reader = new FileReader();
+    reader.onload = async ev=>{
+        await saveFileToDB(f.name,ev.target.result);
+        alert(`已加入文件库：${f.name}`);
+    }
+    reader.readAsText(f,"UTF-8");
+    e.target.value = "";
+})
+
+function searchRun(){
+    const kwText = document.querySelector('#keyword').value.trim();
+    if(!currentSourceText){alert("请先在文件库点击【选用】一个文件");return}
+    if(!kwText){alert("请输入查询关键词");return}
+    const kws = kwText.split(/\s+/).filter(x=>x);
+    const lines = currentSourceText.split(/\r?\n/);
+    resultArr = [];
+    for(let line of lines){
+        for(let k of kws){
+            if(line.includes(k)){
+                resultArr.push(line);
+                break;
+            }
+        }
+    }
+    document.querySelector('#output').value = resultArr.join("\n");
+    document.querySelector('#matchCount').innerText = resultArr.length;
+}
+
+function exportData(){
+    if(!resultArr.length){alert("暂无结果");return}
+    const blob = new Blob([resultArr.join("\n")],{type:"text/plain;charset=utf-8"});
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = "查询结果.txt";
+    a.click();
+    URL.revokeObjectURL(a.href);
+}
+
+function resetResult(){
+    resultArr = [];
+    document.querySelector('#keyword').value = "";
+    document.querySelector('#output').value = "";
+    document.querySelector('#matchCount').innerText = "0";
+}
+
+window.onload = async ()=>{
+    await initDB();
+    renderFileList();
+}
+</script>
+</body>
+</html>
